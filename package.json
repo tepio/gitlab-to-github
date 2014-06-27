@@ -1,0 +1,38 @@
+{
+  "name": "gitlab-to-github",
+  "description": "Migrate issues from gitlab to github",
+  "version": "0.0.1",
+  "author": "Ryan Schumacher",
+  "homepage": "https://github.com/hatch-is/gitlab-to-github",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/hatch-is/gitlab-to-github.git"
+  },
+  "bugs": {
+    "url": "http://github.com/hatch-is/gitlab-to-github/issues"
+  },
+  "licenses": [
+    {
+      "type": "MIT",
+      "url": "http://github.com/gruntjs/grunt-cli/blob/master/LICENSE-MIT"
+    }
+  ],
+  "bin": {
+    "gitlab-to-github": "bin/gitlab-to-github"
+  },
+  "engines": {
+    "node": ">= 0.8.0"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "cliff": "^0.1.8",
+    "commander": "^2.2.0",
+    "github": "^0.2.0",
+    "gitlab": "^0.8.6",
+    "lodash": "^2.4.1",
+    "prompt": "^0.2.13"
+  }
+}

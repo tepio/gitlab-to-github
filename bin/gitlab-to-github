@@ -1,0 +1,245 @@
+#!/usr/bin/env node
+
+var program = require('commander'),
+    cliff = require('cliff'),
+    Github = require('github'),
+    Gitlab = require('gitlab'),
+    _ = require('lodash'),
+    prompt = require('prompt')
+;
+
+program
+  .version('0.0.1')
+  .option('--dry-run', 'Dry-run')
+  .option('-u, --lab-url <url>', 'Gitlab URL [REQUIRED]')
+  .option('-t, --lab-token <token>', 'Gitlab token [REQUIRED]')
+  .option('-n, --hub-user <username>', 'Github username')
+;
+
+var gitlabProjectId, gitlabRepo, githubUser, githubRepo;
+
+function validateGitlabArgs(githubRequired) {
+  if(!program.labUrl) {
+    console.error('Gitlab URL is required [-u, --lab-url]'.red);
+    process.exit();
+  }
+
+  if(!program.labUrl.match(/^http/)) {
+    console.warn('NOTE: Added missing "http"'.yellow);
+    program.labUrl = 'http://' + program.labUrl;
+  }
+
+  if(!program.labToken) {
+    console.error('Gitlab token is required [-t, --lab-token]'.red);
+    process.exit();
+  }
+};
+
+function initGitlab() {
+  validateGitlabArgs();
+
+  return new Gitlab({
+    url:   program.labUrl,
+    token: program.labToken
+  });
+}
+
+function getGitlabProjects() {
+  this.projects.all(function(projects) {
+    console.log('Gitlab Projects'.blue);
+
+    if(projects.length) {
+      console.log(cliff.stringifyObjectRows(projects, ['id', 'name'], ['green', 'green']));
+    }
+    else {
+      console.warn('No gitlab projects found');
+    }
+
+  })
+}
+
+function getGitlabIssues(id, callback) {
+  this.projects.issues.list(id, function(issues) {
+    console.log(('Gitlab project #' + id + ' found ' + issues.length + ' issues').blue);
+
+    if(issues.length) {
+      process.stdout.write('Sorting issues by id... '.blue);
+      issues = _.sortBy(issues, 'iid');
+      console.log('DONE'.blue);
+    }
+    else {
+      console.warn('No issues for project'.yellow);
+      issues = [];
+    }
+
+    if(typeof callback === 'function') {
+      callback(id, issues);
+    }
+
+  })
+}
+
+
+
+
+function initGithub(username, password) {
+  github = new Github({
+    version: program.hubVersion || '3.0.0'
+  });
+
+  github.authenticate({
+    type: 'basic',
+    username: username,
+    password: password
+  });
+
+  return github;
+}
+
+program
+  .command('gitlab-projects')
+  .description('List gitlab projects')
+  .action(function(){
+    gitlab = initGitlab();
+
+    getGitlabProjects.call(gitlab);
+  });
+
+program
+  .command('import-issues <gitlab-project-id> <github-user> <github-repo>')
+  .description('Impore gitlab issue to github')
+  .action(function(id, user, repo){
+    gitlab = initGitlab();
+
+    console.log('Enter github username and password:'.blue)
+
+    var githubPromptSchema = {
+      properties: {
+        password: {
+          required: true,
+          hidden: true
+        }
+      }
+    };
+
+    if(!program.hubUser) {
+      githubPromptSchema.properties.username = {
+        required: true
+      };
+    }
+
+    prompt.start();
+    prompt.get(githubPromptSchema, function (err, result) {
+      if(!err) {
+        username = program.hubUser || result.username;
+
+        github = initGithub(username, result.password);
+
+        // validate repo
+        github.repos.get({
+          user: user,
+          repo: repo
+        }, function(error, msg) {
+
+          if(!err) {
+
+            getGitlabIssues.call(gitlab, id, function(projectId, issues) {
+
+              for(var i = 0; i < issues.length; i++) {
+                var issue = issues[i];
+                var title = issue.title + ' GL#' + issue.iid;
+                var labels = issue.labels || [];
+                var body = issue.description;
+
+                // tag as gitlab-import
+                labels.push('gitlab-import');
+
+                // tag with milestone
+                if(issue.milestone) {
+                  labels.push('milestone-' + issue.milestone.title);
+                }
+
+                // append data to body
+
+                var body = issue.description || '';
+
+                body += "\n\n"
+                     + "\n---"
+                     + "\n**Gitlab Import**"
+                     + "\nState: " + issue.state
+                     + "\nCreated At: " + issue.created_at
+                     + "\nUpdated At: " + issue.updated_at;
+
+                if(issue.assignee && issue.assignee.name) {
+                  body += "\nAssignee: " + issue.assignee.name;
+                }
+
+                if(issue.author && issue.author.name) {
+                  body += "\nAuthor: " + issue.author.name;
+                }
+
+                if(program.dryRun) {
+                  console.log('--- DRY-RUN create issue DRY-RUN ---'.yellow)
+                  cliff.putObject({
+                    user: user,
+                    repo: repo,
+                    title: title,
+                    labels: labels,
+                    body: body,
+                    state: (issue.state === 'closed' ? 'closed' : 'open')
+                  });
+                  console.log('--- DRY-RUN end create issue DRY-RUN ---'.yellow)
+
+                  continue;
+                }
+
+                // create issues
+                (function(issue) {
+                  github.issues.create({
+                    user: user,
+                    repo: repo,
+                    title: title,
+                    labels: labels,
+                    body: body
+                  }, function(err, msg) {
+                    if(!err) {
+                      console.log(('Created Github Issue #' + msg.number + ' from Gitlab #' + issue.iid).green);
+
+                      // Close issue
+                      if(issue.state === 'closed') {
+                        github.issues.edit({
+                          user: user,
+                          repo: repo,
+                          number: msg.number,
+                          state: 'closed'
+                        }, function(err, msg) {
+                          if(!err) {
+                            console.log(('Closed Github Issue #' + msg.number).green);
+                          }
+                          else
+                            console.error('Error closing issue: '.red, msg);
+                        });
+                      }
+                    }
+                    else
+                      console.error('Error creating issue: '.red, msg);
+                  });
+                })(issue);
+
+              }
+
+            });
+
+          }
+          else {
+            console.error(('Error: Github repo ' + user + '/' + repo + ' does not exist').red);
+          }
+
+        });
+
+      }
+    });
+  });
+
+
+program.parse(process.argv);
